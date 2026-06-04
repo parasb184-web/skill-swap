@@ -1,0 +1,16 @@
+{
+  "name": "skillswap-monorepo",
+  "version": "1.0.0",
+  "description": "SkillSwap peer learning platform monorepo configuration",
+  "scripts": {
+    "setup": "npm install && npm install --prefix server && npm install --prefix client",
+    "seed": "npm run seed --prefix server",
+    "start:server": "npm start --prefix server",
+    "start:client": "npm run dev --prefix client",
+    "start:ml": "ml-service\\.venv\\Scripts\\python ml-service\\app.py",
+    "dev": "npx concurrently --kill-others \"npm run start:server\" \"npm run start:client\" \"npm run start:ml\""
+  },
+  "dependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
