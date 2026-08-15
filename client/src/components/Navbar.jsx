@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Bell, LogOut, User as UserIcon, Check, X, Award, HelpCircle } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Bell, LogOut, User as UserIcon, Check, X } from 'lucide-react';
 
 export default function Navbar({ user, notifications, onLogout, onMarkNotificationsRead, onRespondToMatch }) {
   const [showNotifications, setShowNotifications] = useState(false);
@@ -23,10 +23,14 @@ export default function Navbar({ user, notifications, onLogout, onMarkNotificati
     }
   };
 
-  const handleAction = async (matchId, action, notificationId) => {
+  const handleAction = async (matchId, action) => {
     await onRespondToMatch(matchId, action);
     setShowNotifications(false);
   };
+
+  // Only an incoming request whose match is still pending can be acted on.
+  const isActionable = (n) =>
+    n.type === 'match_request' && n.match && n.match._id && n.match.status === 'pending';
 
   return (
     <nav style={styles.nav}>
@@ -80,24 +84,27 @@ export default function Navbar({ user, notifications, onLogout, onMarkNotificati
                         >
                           <p style={styles.notificationText}>{n.message}</p>
                           
-                          {/* If it is a match request, show fast action buttons directly in notification! */}
-                          {n.type === 'match_request' && (
+                          {/* Still-pending requests get fast action buttons right here */}
+                          {isActionable(n) && (
                             <div style={styles.notificationActions}>
-                              <button 
-                                onClick={() => handleAction(n.match, 'accept', n._id)}
+                              <button
+                                onClick={() => handleAction(n.match._id, 'accept')}
                                 style={{ ...styles.actionBtn, ...styles.acceptBtn }}
                                 title="Accept Request"
                               >
                                 <Check size={14} /> Accept
                               </button>
-                              <button 
-                                onClick={() => handleAction(n.match, 'decline', n._id)}
+                              <button
+                                onClick={() => handleAction(n.match._id, 'decline')}
                                 style={{ ...styles.actionBtn, ...styles.declineBtn }}
                                 title="Decline Request"
                               >
                                 <X size={14} /> Decline
                               </button>
                             </div>
+                          )}
+                          {n.type === 'match_request' && !isActionable(n) && (
+                            <span style={styles.resolvedTag}>Already handled</span>
                           )}
                           <span style={styles.notificationTime}>
                             {new Date(n.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -265,6 +272,11 @@ const styles = {
     fontSize: '13px',
     color: 'var(--text-primary)',
     lineHeight: '1.4',
+  },
+  resolvedTag: {
+    fontSize: '10px',
+    color: 'var(--text-muted)',
+    fontStyle: 'italic',
   },
   notificationTime: {
     fontSize: '10px',

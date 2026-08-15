@@ -1,22 +1,34 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import MatchCard from '../components/MatchCard';
 import ProfileSetup from '../components/ProfileSetup';
-import { Mail, Check, MessageCircle, AlertCircle, RefreshCw, Layers, Users } from 'lucide-react';
+import BrowseDirectory from '../components/BrowseDirectory';
+import { Mail, Check, MessageCircle, AlertCircle, RefreshCw, Layers, Users, Search } from 'lucide-react';
 
-export default function Dashboard({ 
-  user, 
-  recommendations, 
-  matches, 
+export default function Dashboard({
+  user,
+  recommendations,
+  matches,
   pendingRequests,
-  onUpdateProfile, 
-  onSendMatchRequest, 
+  onUpdateProfile,
+  onAcceptRecommendation,
+  onPassRecommendation,
   onRespondToMatch,
   loadingRecommendations,
   loadingMatches,
   isSavingProfile,
-  isProcessingMatch
+  isProcessingMatch,
+  recommendationsError,
+  matchError,
+  searchResults,
+  searchPage,
+  searchTotalPages,
+  searchTotal,
+  skillCatalog,
+  loadingSearch,
+  searchError,
+  onSearch
 }) {
-  const [activeTab, setActiveTab] = useState('explore'); // 'explore' or 'connections'
+  const [activeTab, setActiveTab] = useState('explore'); // 'explore' | 'browse' | 'connections'
 
   return (
     <div className="container" style={styles.container}>
@@ -36,9 +48,21 @@ export default function Dashboard({
               }}
             >
               <Layers size={16} />
-              Explore Recommendations
+              Recommended
             </button>
-            <button 
+            <button
+              onClick={() => setActiveTab('browse')}
+              style={{
+                ...styles.tabBtn,
+                color: activeTab === 'browse' ? 'var(--secondary)' : 'var(--text-secondary)',
+                backgroundColor: activeTab === 'browse' ? 'rgba(6, 182, 212, 0.08)' : 'transparent',
+                borderColor: activeTab === 'browse' ? 'rgba(6, 182, 212, 0.2)' : 'transparent'
+              }}
+            >
+              <Search size={16} />
+              Browse All
+            </button>
+            <button
               onClick={() => setActiveTab('connections')}
               style={{
                 ...styles.tabBtn,
@@ -60,10 +84,28 @@ export default function Dashboard({
                 {loadingRecommendations && <RefreshCw size={18} className="spin-icon" color="var(--secondary)" />}
               </div>
               
+              {matchError && (
+                <div style={styles.errorBanner}>
+                  <AlertCircle size={16} />
+                  <span>{matchError}</span>
+                </div>
+              )}
+
               {loadingRecommendations && recommendations.length === 0 ? (
                 <div style={styles.loadingState}>
                   <RefreshCw size={24} className="spin-icon" color="var(--secondary)" />
                   <p>Calculating matches using KNN...</p>
+                </div>
+              ) : recommendationsError ? (
+                <div className="glass-card" style={styles.emptyState}>
+                  <AlertCircle size={32} color="var(--danger)" />
+                  <h3>Recommendations unavailable</h3>
+                  <p style={{ color: 'var(--text-secondary)', marginTop: '8px' }}>
+                    {recommendationsError}
+                  </p>
+                  <p style={{ color: 'var(--text-muted)', marginTop: '8px', fontSize: '13px' }}>
+                    The Python ML service must be running on port 5000 for matching to work.
+                  </p>
                 </div>
               ) : recommendations.length === 0 ? (
                 <div className="glass-card" style={styles.emptyState}>
@@ -76,16 +118,45 @@ export default function Dashboard({
               ) : (
                 <div style={styles.cardList}>
                   {recommendations.map((rec) => (
-                    <MatchCard 
-                      key={rec.user.id} 
+                    <MatchCard
+                      key={rec.user.id}
                       recommendation={rec}
-                      onAccept={onSendMatchRequest}
-                      onDecline={onRespondToMatch} // if they click pass and it's a pending received request, or simply hiding it. For simple logic, we pass user ID to decline
+                      onAccept={onAcceptRecommendation}
+                      onPass={onPassRecommendation}
                       isProcessing={isProcessingMatch}
                     />
                   ))}
                 </div>
               )}
+            </div>
+          )}
+
+          {/* Browse Tab content */}
+          {activeTab === 'browse' && (
+            <div>
+              <div style={styles.sectionTitleRow}>
+                <h2 style={styles.sectionTitle}>Browse Everyone</h2>
+              </div>
+
+              {matchError && (
+                <div style={styles.errorBanner}>
+                  <AlertCircle size={16} />
+                  <span>{matchError}</span>
+                </div>
+              )}
+
+              <BrowseDirectory
+                results={searchResults}
+                page={searchPage}
+                totalPages={searchTotalPages}
+                total={searchTotal}
+                catalog={skillCatalog}
+                isLoading={loadingSearch}
+                error={searchError}
+                onSearch={onSearch}
+                onAccept={onAcceptRecommendation}
+                isProcessingMatch={isProcessingMatch}
+              />
             </div>
           )}
 
@@ -282,6 +353,19 @@ const styles = {
     display: 'flex',
     flexDirection: 'column',
     gap: '16px',
+  },
+  errorBanner: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    background: 'rgba(239, 68, 68, 0.12)',
+    border: '1px solid rgba(239, 68, 68, 0.3)',
+    color: '#f87171',
+    borderRadius: '8px',
+    padding: '12px 16px',
+    fontSize: '13px',
+    fontWeight: '500',
+    marginBottom: '16px',
   },
   sidePanel: {
     alignSelf: 'start',

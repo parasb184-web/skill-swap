@@ -60,6 +60,37 @@ const protect = async (req, res, next) => {
   }
 };
 
+// Builds a lookup of this user's relationship with everyone they have a Match
+// record with. Shared by the recommendation feed and the browse directory so
+// both label a person's status identically.
+// other_user_id -> { status: 'pending_sent'|'pending_received'|'accepted'|'declined', matchId }
+const buildRelationMap = async (userId) => {
+  const existingMatches = await Match.find({
+    $or: [{ requester: userId }, { recipient: userId }]
+  }).lean();
+
+  const map = new Map();
+  existingMatches.forEach(m => {
+    const isReq = m.requester.toString() === userId.toString();
+    const otherUser = isReq ? m.recipient.toString() : m.requester.toString();
+    let status = null;
+    if (m.status === 'accepted') {
+      status = 'accepted';
+    } else if (m.status === 'declined') {
+      status = 'declined';
+    } else if (m.status === 'pending') {
+      status = isReq ? 'pending_sent' : 'pending_received';
+    }
+    if (status) {
+      map.set(otherUser, { status, matchId: m._id });
+    }
+  });
+  return map;
+};
+
+// Escapes user input before it is used inside a RegExp
+const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 // Helper to log user activities
 const logActivity = async (userId, action, details = {}) => {
   try {
@@ -238,34 +269,19 @@ router.get('/recommendations', protect, async (req, res) => {
     }
 
     const { recommendations } = mlResponse.data;
-    
-    // 4. Fetch the existing matches involving this user to filter them out
-    const existingMatches = await Match.find({
-      $or: [{ requester: userId }, { recipient: userId }]
-    }).lean();
 
-    // Create lookup sets for fast matching status checks
-    const matchMap = new Map(); // user_id -> status ('pending_sent', 'pending_received', 'accepted', 'declined')
-    existingMatches.forEach(m => {
-      const isReq = m.requester.toString() === userId.toString();
-      const otherUser = isReq ? m.recipient.toString() : m.requester.toString();
-      if (m.status === 'accepted') {
-        matchMap.set(otherUser, 'accepted');
-      } else if (m.status === 'declined') {
-        matchMap.set(otherUser, 'declined');
-      } else if (m.status === 'pending') {
-        matchMap.set(otherUser, isReq ? 'pending_sent' : 'pending_received');
-      }
-    });
+    // 4. Look up existing relationships so matched/pending people are filtered out
+    const matchMap = await buildRelationMap(userId);
 
     // 5. Populate and filter recommended users
     const detailedRecommendations = [];
     
     for (let rec of recommendations) {
       const recUserId = rec.user_id;
-      
+
       // Filter out users who are already matched/declined or pending
-      const matchStatus = matchMap.get(recUserId);
+      const relation = matchMap.get(recUserId);
+      const matchStatus = relation ? relation.status : null;
       if (matchStatus === 'accepted' || matchStatus === 'declined' || matchStatus === 'pending_sent') {
         continue;
       }
@@ -285,8 +301,13 @@ router.get('/recommendations', protect, async (req, res) => {
         score: rec.score,
         gives_match: rec.gives_match,
         receives_match: rec.receives_match,
+        // The actual skills driving the match, for display on the card
+        gives_skills: rec.gives_skills || [],
+        receives_skills: rec.receives_skills || [],
         has_overlap: rec.has_overlap,
-        matchStatus: matchStatus || 'none' // 'pending_received' or 'none'
+        matchStatus: matchStatus || 'none', // 'pending_received' or 'none'
+        // Present only for 'pending_received' so the client can accept/decline that exact request
+        matchId: matchStatus === 'pending_received' ? relation.matchId : null
       });
     }
 
@@ -296,6 +317,115 @@ router.get('/recommendations', protect, async (req, res) => {
 
   } catch (error) {
     console.error('Error in recommendations route:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ==========================================
+// 3b. Directory: search & browse
+// ==========================================
+
+// Search every profile by free text and/or an exact skill / interest filter.
+// This is the non-ML discovery path: it answers "who teaches Python?" directly
+// instead of waiting for the recommender to surface someone.
+router.get('/users/search', protect, async (req, res) => {
+  const userId = req.user._id;
+  const { q = '', skill = '', interest = '', page = '1', limit = '12' } = req.query;
+
+  const pageNum = Math.max(1, parseInt(page, 10) || 1);
+  const perPage = Math.min(50, Math.max(1, parseInt(limit, 10) || 12));
+
+  try {
+    // Never show the searcher themselves
+    const filters = [{ _id: { $ne: userId } }];
+
+    const term = String(q).trim();
+    if (term) {
+      const rx = new RegExp(escapeRegex(term), 'i');
+      filters.push({ $or: [{ name: rx }, { bio: rx }, { skills: rx }, { interests: rx }] });
+    }
+
+    // Exact (case-insensitive) tag filters, served by the skills/interests indexes
+    const skillFilter = String(skill).trim();
+    if (skillFilter) {
+      filters.push({ skills: new RegExp(`^${escapeRegex(skillFilter)}$`, 'i') });
+    }
+    const interestFilter = String(interest).trim();
+    if (interestFilter) {
+      filters.push({ interests: new RegExp(`^${escapeRegex(interestFilter)}$`, 'i') });
+    }
+
+    const query = { $and: filters };
+
+    const [total, users, relationMap] = await Promise.all([
+      User.countDocuments(query),
+      User.find(query, '_id name bio skills interests')
+        .sort({ name: 1 })
+        .skip((pageNum - 1) * perPage)
+        .limit(perPage)
+        .lean(),
+      buildRelationMap(userId)
+    ]);
+
+    // Compute the same complementarity view the recommendation cards show, so a
+    // browsed profile explains itself just as well as a recommended one.
+    const mySkills = new Set(req.user.skills);
+    const myInterests = new Set(req.user.interests);
+
+    const results = users.map(u => {
+      const relation = relationMap.get(u._id.toString());
+      // Sorted to match the ordering the ML service returns for recommendations
+      const givesSkills = (u.skills || []).filter(s => myInterests.has(s)).sort();
+      const receivesSkills = (u.interests || []).filter(i => mySkills.has(i)).sort();
+      return {
+        user: {
+          id: u._id,
+          name: u.name,
+          bio: u.bio,
+          skills: u.skills,
+          interests: u.interests
+        },
+        gives_match: givesSkills.length,
+        receives_match: receivesSkills.length,
+        gives_skills: givesSkills,
+        receives_skills: receivesSkills,
+        has_overlap: givesSkills.length > 0 || receivesSkills.length > 0,
+        matchStatus: relation ? relation.status : 'none',
+        matchId: relation && relation.status === 'pending_received' ? relation.matchId : null
+      };
+    });
+
+    res.json({
+      results,
+      page: pageNum,
+      perPage,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / perPage))
+    });
+  } catch (error) {
+    console.error('Error in user search route:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Every tag in use, with how many people teach or want it. Powers the browse
+// filters and doubles as a "what is in demand" signal.
+router.get('/skills', protect, async (req, res) => {
+  try {
+    const tally = (field) => User.aggregate([
+      { $unwind: `$${field}` },
+      { $group: { _id: `$${field}`, count: { $sum: 1 } } },
+      { $sort: { count: -1, _id: 1 } }
+    ]);
+
+    const [taught, wanted] = await Promise.all([tally('skills'), tally('interests')]);
+
+    res.json({
+      skills: taught.map(t => ({ name: t._id, count: t.count })),
+      interests: wanted.map(t => ({ name: t._id, count: t.count }))
+    });
+  } catch (error) {
+    console.error('Error in skills catalog route:', error.message);
     res.status(500).json({ error: error.message });
   }
 });
@@ -361,7 +491,8 @@ router.post('/matches/request', protect, async (req, res) => {
         const populatedNotification = {
           _id: notification._id,
           recipient: notification.recipient,
-          match: match._id,
+          // Same shape as the populated match returned by GET /notifications
+          match: { _id: match._id, status: match.status },
           sender: {
             id: req.user._id,
             name: req.user.name,
@@ -433,7 +564,7 @@ router.post('/matches/respond', protect, async (req, res) => {
           const populatedNotification = {
             _id: notification._id,
             recipient: notification.recipient,
-            match: match._id,
+            match: { _id: match._id, status: match.status },
             sender: {
               id: req.user._id,
               name: req.user.name,
@@ -535,8 +666,11 @@ router.get('/notifications', protect, async (req, res) => {
   const userId = req.user._id;
 
   try {
+    // The match status travels with the notification so the client knows whether
+    // a request is still actionable (accept/decline) or already resolved.
     const notifications = await Notification.find({ recipient: userId })
       .populate('sender', 'name skills interests')
+      .populate('match', 'status')
       .sort({ createdAt: -1 })
       .lean();
 

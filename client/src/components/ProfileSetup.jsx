@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Plus, X, Award, HelpCircle, Save, Check } from 'lucide-react';
 
 const POPULAR_SKILLS = [
