@@ -203,6 +203,15 @@ h1, h2, h3, h4 {
   border: 1px solid rgba(139, 92, 246, 0.3);
 }
 
+/* Marks the individual skills responsible for a match */
+.badge-match {
+  box-shadow: 0 0 0 1px currentColor, 0 0 12px -2px currentColor;
+  font-weight: 700;
+}
+.badge-match::before {
+  content: '✓ ';
+}
+
 /* Animations */
 @keyframes fadeIn {
   from { opacity: 0; }
@@ -218,6 +227,11 @@ h1, h2, h3, h4 {
     opacity: 1;
     transform: translateY(0);
   }
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 @keyframes ring {
@@ -242,6 +256,21 @@ h1, h2, h3, h4 {
 
 .bell-ring {
   animation: ring 1.5s ease infinite;
+}
+
+.spin-icon {
+  animation: spin 1s linear infinite;
+}
+
+/* Disabled controls should read as disabled */
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+}
+.btn:disabled:hover {
+  filter: none;
+  transform: none;
 }
 
 /* Main Layout Grid */

@@ -12,6 +12,14 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 app = Flask(__name__)
 CORS(app)
 
+# Complementarity between two people lives entirely in the tag columns. The two
+# engineered count features describe how *large* a profile is, not how well it
+# fits. Because they are dense values in a tag space that is almost all zeros,
+# leaving them at full weight inside a cosine distance lets profile size outrank
+# genuine skill complementarity (profiles sharing no tags at all were scoring
+# ~20%). They stay in the pipeline, weighted down to act as a mild tiebreaker.
+COUNT_FEATURE_WEIGHT = 0.15
+
 @app.route('/health', methods=['GET'])
 def health():
     return jsonify({"status": "healthy"}), 200
@@ -88,7 +96,12 @@ def recommend():
         # Preprocessing Pipeline: MinMaxScaler to scale features between 0 and 1
         scaler = MinMaxScaler()
         scaled_features = scaler.fit_transform(features)
-        
+
+        # Weight vector: tag columns at full strength, the engineered counts damped
+        feature_weights = np.ones(scaled_features.shape[1])
+        feature_weights[2 * num_tags:] = COUNT_FEATURE_WEIGHT
+        scaled_features = scaled_features * feature_weights
+
         # Get target user's original vector index
         target_idx = user_ids.index(str(target_user_id))
         target_orig = features[target_idx]
@@ -109,8 +122,9 @@ def recommend():
             [target_num_interests, target_num_skills]
         ]).reshape(1, -1)
         
-        # Scale the query vector using the same scaler fitted on user features
-        query_scaled = scaler.transform(query_vector)
+        # Scale the query vector using the same scaler fitted on user features,
+        # then apply the identical weighting so both live in the same space
+        query_scaled = scaler.transform(query_vector) * feature_weights
         
         # Fit KNN model using Cosine Similarity (metric='cosine')
         # We fit on all profiles
@@ -141,25 +155,38 @@ def recommend():
             rec_skills_set = set(rec_user.get('skills', []))
             rec_interests_set = set(rec_user.get('interests', []))
             
-            # Mutual skill swap overlap
-            gives_match = len(target_interests_set.intersection(rec_skills_set))
-            receives_match = len(target_skills_set.intersection(rec_interests_set))
-            
+            # Mutual skill swap overlap. Return the skills themselves and not
+            # just how many there are, so the UI can name the reason for a match.
+            # gives    = what they teach that the target wants to learn
+            # receives = what the target teaches that they want to learn
+            gives_skills = sorted(target_interests_set.intersection(rec_skills_set))
+            receives_skills = sorted(target_skills_set.intersection(rec_interests_set))
+
+            gives_match = len(gives_skills)
+            receives_match = len(receives_skills)
+
             # Boost the similarity score based on direct complementarity
-            # (KNN with raw cosine distance on swapped profile is already doing this, 
+            # (KNN with raw cosine distance on swapped profile is already doing this,
             # but we can explicitly record if there is a match)
             has_match = (gives_match > 0 or receives_match > 0)
-            
+
             recommendations.append({
                 "user_id": rec_id,
                 "score": round(sim_score, 4),
                 "gives_match": gives_match,
                 "receives_match": receives_match,
+                "gives_skills": gives_skills,
+                "receives_skills": receives_skills,
                 "has_overlap": has_match
             })
             
-        # Sort recommendations by similarity score (descending)
-        recommendations = sorted(recommendations, key=lambda x: x['score'], reverse=True)
+        # Sort by similarity score, breaking ties with the count of concrete
+        # two-way skill overlaps so equally-scored profiles order deterministically
+        recommendations = sorted(
+            recommendations,
+            key=lambda x: (x['score'], x['gives_match'] + x['receives_match']),
+            reverse=True
+        )
         
         logging.info(f"Successfully computed {len(recommendations)} recommendations for user {target_user_id}")
         return jsonify({

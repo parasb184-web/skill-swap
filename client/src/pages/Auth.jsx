@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 
 export default function Auth({ onLogin, onRegister, error, isProcessing }) {
   const [isLogin, setIsLogin] = useState(true);
